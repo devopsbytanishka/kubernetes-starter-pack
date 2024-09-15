@@ -1,150 +1,151 @@
-# Kubeadm Installation Guide
+# Minikube Installation Guide for Ubuntu
 
-This guide outlines the steps needed to set up a Kubernetes cluster using kubeadm.
+This guide provides step-by-step instructions for installing Minikube on Ubuntu. Minikube allows you to run a single-node Kubernetes cluster locally for development and testing purposes.
 
 ## Pre-requisites
 
-- Ubuntu OS (Xenial or later)
-- sudo privileges
-- Internet access
-- t2.medium instance type or higher
+* Ubuntu OS
+* sudo privileges
+* Internet access
+* Virtualization support enabled (Check with `egrep -c '(vmx|svm)' /proc/cpuinfo`, 0=disabled 1=enabled) 
 
 ---
 
-## AWS Setup
+## Step 1: Update System Packages
 
-- Make sure your all instance are in same **Security group**.
-- Expose port **6443** in the **Security group**, so that worker nodes can join the cluster.
-
----
-
-## Execute on Both "Master" & "Worker Node"
-
-Run the following commands on both the master and worker nodes to prepare them for kubeadm.
+Update your package lists to make sure you are getting the latest version and dependencies.
 
 ```bash
-# disable swap
-sudo swapoff -a
-
-# Create the .conf file to load the modules at bootup
-cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
-
-sudo modprobe overlay
-sudo modprobe br_netfilter
-
-# sysctl params required by setup, params persist across reboots
-cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-
-# Apply sysctl params without reboot
-sudo sysctl --system
-
-## Install CRIO Runtime
-sudo apt-get update -y
-sudo apt-get install -y software-properties-common curl apt-transport-https ca-certificates gpg
-
-sudo curl -fsSL https://pkgs.k8s.io/addons:/cri-o:/prerelease:/main/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/cri-o-apt-keyring.gpg
-echo "deb [signed-by=/etc/apt/keyrings/cri-o-apt-keyring.gpg] https://pkgs.k8s.io/addons:/cri-o:/prerelease:/main/deb/ /" | sudo tee /etc/apt/sources.list.d/cri-o.list
-
-sudo apt-get update -y
-sudo apt-get install -y cri-o
-
-sudo systemctl daemon-reload
-sudo systemctl enable crio --now
-sudo systemctl start crio.service
-
-echo "CRI runtime installed successfully"
-
-# Add Kubernetes APT repository and install required packages
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-
-sudo apt-get update -y
-sudo apt-get install -y kubelet="1.29.0-*" kubectl="1.29.0-*" kubeadm="1.29.0-*"
-sudo apt-get update -y
-sudo apt-get install -y jq
-
-sudo systemctl enable --now kubelet
-sudo systemctl start kubelet
+sudo apt update
 ```
 
----
+<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/57f1c5d9-474a-43b8-90b9-fe542e122f3f)</kbd>
 
-## Execute ONLY on "Master Node"
+
+## Step 2: Install Required Packages
+
+Install some basic required packages.
 
 ```bash
-sudo kubeadm config images pull
-
-sudo kubeadm init
-
-mkdir -p "$HOME"/.kube
-sudo cp -i /etc/kubernetes/admin.conf "$HOME"/.kube/config
-sudo chown "$(id -u)":"$(id -g)" "$HOME"/.kube/config
-
-
-# Network Plugin = calico
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.0/manifests/calico.yaml
-
-kubeadm token create --print-join-command
+sudo apt install -y curl wget apt-transport-https
 ```
 
-- You will get `kubeadm token`, **Copy it**.
-  <img src="https://raw.githubusercontent.com/faizan35/kubernetes_cluster_with_kubeadm/main/Img/kubeadm-token.png" width="75%">
+<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/84ad8474-8d4d-4d4b-a04d-def88f76dc9a)</kbd>
 
 ---
 
-## Execute on ALL of your Worker Node's
+## Step 3: Install Docker
 
-1. Perform pre-flight checks
+Minikube can run a Kubernetes cluster either in a VM or locally via Docker. This guide demonstrates the Docker method.
 
-   ```bash
-   sudo kubeadm reset pre-flight checks
-   ```
+```bash
+sudo apt install -y docker.io
+```
+<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/d261f75b-a22f-4510-b3a3-14e1cecaf3e1)</kbd>
 
-2. Paste the join command you got from the master node and append `--v=5` at the end.
 
-   ```bash
-   sudo your-token --v=5
-   ```
+Start and enable Docker.
 
-   > Use `sudo` before the token.
+```bash
+sudo systemctl enable --now docker
+```
+
+Add current user to docker group (To use docker without root)
+
+```bash
+sudo usermod -aG docker $USER && newgrp docker
+```
+Now, logout (use `exit` command) and connect again.
 
 ---
 
-## Verify Cluster Connection
+## Step 4: Install Minikube
 
-**On Master Node:**
+First, download the Minikube binary using `curl`:
+
+```bash
+curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+```
+
+Make it executable and move it into your path:
+
+```bash
+chmod +x minikube
+sudo mv minikube /usr/local/bin/
+```
+
+<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/80e8a137-286a-4334-886b-ea4821f596b2)</kbd>
+
+---
+
+## Step 5: Install kubectl
+
+Download kubectl, which is a Kubernetes command-line tool.
+
+```bash
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+```
+**Check above image ⬆️**
+Make it executable and move it into your path:
+
+```bash
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin/
+```
+<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/cdda6c84-f6c9-4d05-87e0-ed8627e46a3a)</kbd>
+
+---
+
+## Step 6: Start Minikube
+
+Now, you can start Minikube with the following command:
+
+```bash
+minikube start --driver=docker --vm=true 
+```
+
+This command will start a single-node Kubernetes cluster inside a Docker container.
+
+---
+
+## Step 7: Check Cluster Status
+
+Check the cluster status with:
+
+```bash
+minikube status
+```
+
+<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/a2dabec8-b073-4e1e-a831-dd6845000230)</kbd>
+
+
+You can also use `kubectl` to interact with your cluster:
 
 ```bash
 kubectl get nodes
 ```
 
-   <img src="https://raw.githubusercontent.com/faizan35/kubernetes_cluster_with_kubeadm/main/Img/nodes-connected.png" width="70%">
-
 ---
 
-## Optional: Labeling Nodes
+## Step 8: Stop Minikube
 
-If you want to label worker nodes, you can use the following command:
+When you are done, you can stop the Minikube cluster with:
 
 ```bash
-kubectl label node <node-name> node-role.kubernetes.io/worker=worker
+minikube stop
 ```
 
 ---
 
-## Optional: Test a demo Pod
+## Optional: Delete Minikube Cluster
 
-If you want to test a demo pod, you can use the following command:
+If you wish to delete the Minikube cluster entirely, you can do so with:
 
 ```bash
-kubectl run hello-world-pod --image=busybox --restart=Never --command -- sh -c "echo 'Hello, World' && sleep 3600"
+minikube delete
 ```
 
-<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/bace1884-bbba-4e2f-8fb2-83bbba819d08)</kbd>
+---
+
+That's it! You've successfully installed Minikube on Ubuntu, and you can now start deploying Kubernetes applications for development and testing.
+```
