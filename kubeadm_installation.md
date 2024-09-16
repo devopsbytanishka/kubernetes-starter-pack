@@ -30,6 +30,10 @@ sudo apt-get install -y apt-transport-https ca-certificates curl gpg
 #Download the public signing key for the Kubernetes package repositories.
 curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg 
 
+#Install docker
+sudo apt install docker.io -y
+sudo systemctl enable --now docker
+
 #Add the appropriate Kubernetes apt repository.
 echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
 
