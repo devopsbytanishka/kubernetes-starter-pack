@@ -1,11 +1,11 @@
 # Kubeadm Installation Guide
 
-This guide outlines the steps needed to set up a Kubernetes cluster using kubeadm.
+This guide outlines the steps needed to set up a Kubernetes cluster using `kubeadm`.
 
-## Pre-requisites
+## Prerequisites
 
 - Ubuntu OS (Xenial or later)
-- sudo privileges
+- `sudo` privileges
 - Internet access
 - t2.medium instance type or higher
 
@@ -13,78 +13,165 @@ This guide outlines the steps needed to set up a Kubernetes cluster using kubead
 
 ## AWS Setup
 
-- Make sure your all instance are in same **Security group**.
-- Expose port **6443** in the **Security group**, so that worker nodes can join the cluster.
+1. Ensure that all instances are in the same **Security Group**.
+2. Expose port **6443** in the **Security Group** to allow worker nodes to join the cluster.
+3. Expose port **22** in the **Security Group** to allows SSH access to manage the instance..
+
+
+## To do above setup, follow below provided steps
+
+### Step 1: Identify or Create a Security Group
+
+1. **Log in to the AWS Management Console**:
+    - Go to the **EC2 Dashboard**.
+
+2. **Locate Security Groups**:
+    - In the left menu under **Network & Security**, click on **Security Groups**.
+
+3. **Create a New Security Group**:
+    - Click on **Create Security Group**.
+    - Provide the following details:
+      - **Name**: (e.g., `Kubernetes-Cluster-SG`)
+      - **Description**: A brief description for the security group (mandatory)
+      - **VPC**: Select the appropriate VPC for your instances (default is acceptable)
+
+4. **Add Rules to the Security Group**:
+    - **Allow SSH Traffic (Port 22)**:
+      - **Type**: SSH
+      - **Port Range**: `22`
+      - **Source**: `0.0.0.0/0` (Anywhere) or your specific IP
+    
+    - **Allow Kubernetes API Traffic (Port 6443)**:
+      - **Type**: Custom TCP
+      - **Port Range**: `6443`
+      - **Source**: `0.0.0.0/0` (Anywhere) or specific IP ranges
+
+5. **Save the Rules**:
+    - Click on **Create Security Group** to save the settings.
+
+### Step 2: Select the Security Group While Creating Instances
+
+- When launching EC2 instances:
+  - Under **Configure Security Group**, select the existing security group (`Kubernetes-Cluster-SG`)
+
+> Note: Security group settings can be updated later as needed.
 
 ---
 
-## Execute on Both "Master" & "Worker Node"
 
-Run the following commands on both the master and worker nodes to prepare them for kubeadm.
+## Execute on Both "Master" & "Worker" Nodes
 
-```bash
-#Update the apt package index and install packages needed to use the Kubernetes apt repository:
-sudo apt update
-sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+1. **Disable Swap**: Required for Kubernetes to function correctly.
+    ```bash
+    sudo swapoff -a
+    ```
 
-#Download the public signing key for the Kubernetes package repositories.
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg 
+2. **Load Necessary Kernel Modules**: Required for Kubernetes networking.
+    ```bash
+    cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+    overlay
+    br_netfilter
+    EOF
 
-#Install docker
-sudo apt install docker.io -y
-sudo systemctl enable --now docker
+    sudo modprobe overlay
+    sudo modprobe br_netfilter
+    ```
 
-#Add the appropriate Kubernetes apt repository.
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+3. **Set Sysctl Parameters**: Helps with networking.
+    ```bash
+    cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+    net.bridge.bridge-nf-call-iptables  = 1
+    net.bridge.bridge-nf-call-ip6tables = 1
+    net.ipv4.ip_forward                 = 1
+    EOF
 
-#Update the apt package index, install kubelet, kubeadm and kubectl, and pin their version:
-sudo apt-get update
-sudo apt-get install -y kubelet kubeadm kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
+    sudo sysctl --system
+    lsmod | grep br_netfilter
+    lsmod | grep overlay
+    ```
 
+4. **Install Containerd**:
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y ca-certificates curl
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-sudo systemctl enable --now kubelet
-sudo systemctl start kubelet
-```
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    sudo apt-get update
+    sudo apt-get install -y containerd.io
+
+    containerd config default | sed -e 's/SystemdCgroup = false/SystemdCgroup = true/' -e 's/sandbox_image = "registry.k8s.io\/pause:3.6"/sandbox_image = "registry.k8s.io\/pause:3.9"/' | sudo tee /etc/containerd/config.toml
+
+    sudo systemctl restart containerd
+    sudo systemctl status containerd
+    ```
+
+5. **Install Kubernetes Components**:
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+    sudo apt-get update
+    sudo apt-get install -y kubelet kubeadm kubectl
+    sudo apt-mark hold kubelet kubeadm kubectl
+    ```
+
+## Execute ONLY on the "Master" Node
+
+1. **Initialize the Cluster**:
+    ```bash
+    sudo kubeadm init
+    ```
+
+2. **Set Up Local kubeconfig**:
+    ```bash
+    mkdir -p "$HOME"/.kube
+    sudo cp -i /etc/kubernetes/admin.conf "$HOME"/.kube/config
+    sudo chown "$(id -u)":"$(id -g)" "$HOME"/.kube/config
+    ```
+
+3. **Install a Network Plugin (Calico)**:
+    ```bash
+    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.0/manifests/calico.yaml
+    ```
+
+4. **Generate Join Command**:
+    ```bash
+    kubeadm token create --print-join-command
+    ```
+
+> Copy this generated token for next command.
 
 ---
 
-## Execute ONLY on "Master Node"
+## Execute on ALL of your Worker Nodes
 
-```bash
-sudo kubeadm init
+1. Perform pre-flight checks:
+    ```bash
+    sudo kubeadm reset pre-flight checks
+    ```
 
-mkdir -p "$HOME"/.kube
-sudo cp -i /etc/kubernetes/admin.conf "$HOME"/.kube/config
-sudo chown "$(id -u)":"$(id -g)" "$HOME"/.kube/config
+2. Paste the join command you got from the master node and append `--v=5` at the end:
+    ```bash
+    sudo kubeadm join <private-ip-of-control-plane>:6443 --token <token> --discovery-token-ca-cert-hash sha256:<hash> --cri-socket 
+    "unix:///run/containerd/containerd.sock" --v=5
+    ```
 
-
-# Network Plugin
-kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
-
-kubeadm token create --print-join-command
-```
-
-- You will get `kubeadm token`, **Copy it**.
-  <img src="https://raw.githubusercontent.com/faizan35/kubernetes_cluster_with_kubeadm/main/Img/kubeadm-token.png" width="75%">
-
----
-
-## Execute on ALL of your Worker Node's
-
-1. Perform pre-flight checks
-
-   ```bash
-   sudo kubeadm reset pre-flight checks
-   ```
-
-2. Paste the join command you got from the master node and append `--v=5` at the end.
-
-   ```bash
-   sudo your-token --v=5
-   ```
-
-   > Use `sudo` before the token.
+    > **Note**: When pasting the join command from the master node:
+    > 1. Add `sudo` at the beginning of the command
+    > 2. Add `--v=5` at the end
+    >
+    > Example format:
+    > ```bash
+    > sudo <paste-join-command-here> --v=5
+    > ```
 
 ---
 
@@ -94,28 +181,14 @@ kubeadm token create --print-join-command
 
 ```bash
 kubectl get nodes
+
 ```
 
    <img src="https://raw.githubusercontent.com/faizan35/kubernetes_cluster_with_kubeadm/main/Img/nodes-connected.png" width="70%">
 
 ---
 
-## Optional: Labeling Nodes
+## Verify Container Status on Worker Node
+<img src="https://github.com/user-attachments/assets/c3d3732f-5c99-4a27-a574-86bc7ae5a933" width="70%">
 
-If you want to label worker nodes, you can use the following command:
 
-```bash
-kubectl label node <node-name> node-role.kubernetes.io/worker=worker
-```
-
----
-
-## Optional: Test a demo Pod
-
-If you want to test a demo pod, you can use the following command:
-
-```bash
-kubectl run hello-world-pod --image=busybox --restart=Never --command -- sh -c "echo 'Hello, World' && sleep 3600"
-```
-
-<kbd>![image](https://github.com/paragpallavsingh/kubernetes-kickstarter/assets/40052830/bace1884-bbba-4e2f-8fb2-83bbba819d08)</kbd>
